@@ -1,0 +1,33 @@
+syntax = "proto3";
+option go_package = "./proto";
+
+service User{
+  rpc Set(UserMessage) returns (UserInsert) {};
+}
+
+message UserMessage{
+  string firstName = 1;
+  string lastName = 2;
+  string email = 3;
+}
+
+message UserInsert{
+  bool success = 1;
+  string email= 2;
+}
+
+
+service Tutorial {
+  // Sends a greeting
+  rpc SayHello (HelloRequest) returns (HelloReply) {}
+}
+
+// The request message containing the user's name.
+message HelloRequest {
+  string name = 1;
+}
+
+// The response message containing the greetings
+message HelloReply {
+  string message = 1;
+}
