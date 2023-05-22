@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/promisefemi/grpc-client-pooling"
 	"github.com/promisefemi/grpc-client-pooling/proto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -47,4 +46,5 @@ func main() {
 		}
 		client.Release()
 	}
+
 }
