@@ -1,4 +1,4 @@
-module github.com/promisefemi/grpc-client-pooling
+module github.com/promisefemi/grpc-client-pool
 
 go 1.19
 
