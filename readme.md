@@ -8,6 +8,9 @@ go get github.com/promisefemi/grpc-client-pool
 
 #### Usage
 ```go 
+import pool "github.com/promisefemi/grpc-client-pool"
+
+
 poolConfig := &pool.PoolConfig{
     // Server address
     Address: ":9000",
