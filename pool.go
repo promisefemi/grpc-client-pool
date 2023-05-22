@@ -1,4 +1,4 @@
-package pool
+package grpc_pool
 
 import (
 	"context"
@@ -14,18 +14,8 @@ var (
 )
 
 type queueChan struct {
-	connectionChan chan *clientCon
+	connectionChan chan *ClientCon
 	errorChan      chan error
-}
-
-type clientCon struct {
-	id   string
-	pool *ClientPool
-	conn *grpc.ClientConn
-}
-
-func (c *clientCon) Release() {
-	c.pool.put(c)
 }
 
 type ClientPool struct {
@@ -35,7 +25,7 @@ type ClientPool struct {
 	configOptions       []grpc.DialOption
 	maxOpenConnection   int
 	maxIdleConnection   int
-	idleConnections     map[string]*clientCon
+	idleConnections     map[string]*ClientCon
 	numOfOpenConnection int
 	connectionQueue     chan *queueChan
 	clientDuration      time.Duration
@@ -60,26 +50,27 @@ func NewClientPool(config *PoolConfig) *ClientPool {
 		numOfOpenConnection: 0,
 		connectionQueue:     make(chan *queueChan, config.ConnectionQueueLength),
 		clientDuration:      config.NewClientDuration,
+		idleConnections:     make(map[string]*ClientCon, 0),
 	}
 
 	go clientPool.handleConnectionRequest()
 	return clientPool
 }
 
-func (cp *ClientPool) put(conn *clientCon) {
+func (cp *ClientPool) put(conn *ClientCon) {
 	cp.mu.Lock()
 	defer cp.mu.Unlock()
 
-	conn.conn.GetState()
+	conn.Conn.GetState()
 	if cp.maxIdleConnection >= len(cp.idleConnections) {
 		cp.idleConnections[conn.id] = conn
 	} else {
-		_ = conn.conn.Close()
 		cp.numOfOpenConnection--
+		_ = conn.Conn.Close()
 	}
 }
 
-func (cp *ClientPool) get() (*clientCon, error) {
+func (cp *ClientPool) Get() (*ClientCon, error) {
 	cp.mu.Lock()
 
 	//	first find an idle connection and return
@@ -97,7 +88,7 @@ func (cp *ClientPool) get() (*clientCon, error) {
 
 	if cp.maxOpenConnection > 0 && cp.numOfOpenConnection >= cp.maxOpenConnection {
 		queueRequest := &queueChan{
-			connectionChan: make(chan *clientCon),
+			connectionChan: make(chan *ClientCon),
 			errorChan:      make(chan error),
 		}
 
@@ -125,7 +116,7 @@ func (cp *ClientPool) get() (*clientCon, error) {
 
 }
 
-func (cp *ClientPool) openConnection() (*clientCon, error) {
+func (cp *ClientPool) openConnection() (*ClientCon, error) {
 	var newConn *grpc.ClientConn
 	var err error
 
@@ -147,13 +138,18 @@ func (cp *ClientPool) openConnection() (*clientCon, error) {
 		return nil, err
 	}
 
-	return &clientCon{
+	return &ClientCon{
 		id:   fmt.Sprintf("%v", time.Now().Unix()),
 		pool: cp,
-		conn: newConn,
+		Conn: newConn,
 	}, nil
 }
 
+func (cp *ClientPool) GetNumberOfOpenConnections() int {
+	return cp.numOfOpenConnection
+}
+
+// Handle Connection request Queue
 func (cp *ClientPool) handleConnectionRequest() {
 	for rq := range cp.connectionQueue {
 
