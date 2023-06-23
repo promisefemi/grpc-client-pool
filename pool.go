@@ -46,26 +46,24 @@ func NewClientPool(config *PoolConfig) *ClientPool {
 		address:             config.Address,
 		configOptions:       config.ConfigOptions,
 		maxOpenConnection:   config.MaxOpenConnection,
-		maxIdleConnection:   config.MaxOpenConnection,
+		maxIdleConnection:   config.MaxIdleConnection,
 		numOfOpenConnection: 0,
 		connectionQueue:     make(chan *queueChan, config.ConnectionQueueLength),
 		clientDuration:      config.NewClientDuration,
 		idleConnections:     make(map[string]*ClientCon, 0),
 	}
 
-	go clientPool.handleConnectionRequest()
+	go clientPool.handleConnectionQueue()
 	return clientPool
 }
 
 func (cp *ClientPool) put(conn *ClientCon) {
 	cp.mu.Lock()
 	defer cp.mu.Unlock()
-
-	conn.Conn.GetState()
+	cp.numOfOpenConnection--
 	if cp.maxIdleConnection >= len(cp.idleConnections) {
 		cp.idleConnections[conn.id] = conn
 	} else {
-		cp.numOfOpenConnection--
 		_ = conn.Conn.Close()
 	}
 }
@@ -150,7 +148,7 @@ func (cp *ClientPool) GetNumberOfOpenConnections() int {
 }
 
 // Handle Connection request Queue
-func (cp *ClientPool) handleConnectionRequest() {
+func (cp *ClientPool) handleConnectionQueue() {
 	for rq := range cp.connectionQueue {
 
 		var (
@@ -183,7 +181,7 @@ func (cp *ClientPool) handleConnectionRequest() {
 					}
 				} else if cp.maxOpenConnection > 0 && cp.maxOpenConnection > cp.numOfOpenConnection {
 					//check if pool has not exceeded number of allowed open connections
-					// increase numberOfConnection hoping connection is created
+					// increase numberOfConnection hoping new connection would be created
 					cp.numOfOpenConnection++
 					cp.mu.Unlock()
 
