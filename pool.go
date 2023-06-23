@@ -21,14 +21,16 @@ type queueChan struct {
 type ClientPool struct {
 	mu sync.Mutex
 
-	address             string
-	configOptions       []grpc.DialOption
-	maxOpenConnection   int
-	maxIdleConnection   int
-	idleConnections     map[string]*ClientCon
-	numOfOpenConnection int
-	connectionQueue     chan *queueChan
-	clientDuration      time.Duration
+	address               string
+	configOptions         []grpc.DialOption
+	maxOpenConnection     int
+	maxIdleConnection     int
+	idleConnections       map[string]*ClientCon
+	numOfOpenConnection   int
+	numOfConnectionsInUse int
+
+	connectionQueue chan *queueChan
+	clientDuration  time.Duration
 }
 
 type PoolConfig struct {
@@ -42,15 +44,13 @@ type PoolConfig struct {
 
 func NewClientPool(config *PoolConfig) *ClientPool {
 	clientPool := &ClientPool{
-		mu:                  sync.Mutex{},
-		address:             config.Address,
-		configOptions:       config.ConfigOptions,
-		maxOpenConnection:   config.MaxOpenConnection,
-		maxIdleConnection:   config.MaxIdleConnection,
-		numOfOpenConnection: 0,
-		connectionQueue:     make(chan *queueChan, config.ConnectionQueueLength),
-		clientDuration:      config.NewClientDuration,
-		idleConnections:     make(map[string]*ClientCon, 0),
+		address:           config.Address,
+		configOptions:     config.ConfigOptions,
+		maxOpenConnection: config.MaxOpenConnection,
+		maxIdleConnection: config.MaxIdleConnection,
+		connectionQueue:   make(chan *queueChan, config.ConnectionQueueLength),
+		clientDuration:    config.NewClientDuration,
+		idleConnections:   make(map[string]*ClientCon, 0),
 	}
 
 	go clientPool.handleConnectionQueue()
@@ -60,10 +60,11 @@ func NewClientPool(config *PoolConfig) *ClientPool {
 func (cp *ClientPool) put(conn *ClientCon) {
 	cp.mu.Lock()
 	defer cp.mu.Unlock()
-	cp.numOfOpenConnection--
+	cp.numOfConnectionsInUse--
 	if cp.maxIdleConnection >= len(cp.idleConnections) {
 		cp.idleConnections[conn.id] = conn
 	} else {
+		cp.numOfOpenConnection--
 		_ = conn.Conn.Close()
 	}
 }
@@ -78,7 +79,7 @@ func (cp *ClientPool) Get() (*ClientCon, error) {
 	if len(cp.idleConnections) > 0 {
 		for _, val := range cp.idleConnections {
 			delete(cp.idleConnections, val.id)
-			cp.numOfOpenConnection++
+			cp.numOfConnectionsInUse++
 			cp.mu.Unlock()
 			return val, nil
 		}
@@ -91,14 +92,15 @@ func (cp *ClientPool) Get() (*ClientCon, error) {
 		}
 
 		cp.connectionQueue <- queueRequest
+		cp.mu.Unlock()
 
 		select {
 		case conn := <-queueRequest.connectionChan:
-			cp.numOfOpenConnection++
+			cp.mu.Lock()
+			cp.numOfConnectionsInUse++
 			cp.mu.Unlock()
 			return conn, nil
 		case err := <-queueRequest.errorChan:
-			cp.mu.Unlock()
 			return nil, err
 		}
 
@@ -108,6 +110,7 @@ func (cp *ClientPool) Get() (*ClientCon, error) {
 		return nil, err
 	}
 
+	cp.numOfConnectionsInUse++
 	cp.numOfOpenConnection++
 	cp.mu.Unlock()
 	return conn, nil
@@ -144,7 +147,20 @@ func (cp *ClientPool) openConnection() (*ClientCon, error) {
 }
 
 func (cp *ClientPool) GetNumberOfOpenConnections() int {
+	cp.mu.Lock()
+	defer cp.mu.Unlock()
 	return cp.numOfOpenConnection
+}
+
+func (cp *ClientPool) GetNumberOfIdleConnections() int {
+	cp.mu.Lock()
+	defer cp.mu.Unlock()
+	return len(cp.idleConnections)
+}
+func (cp *ClientPool) GetNumberOfConnectionsInUse() int {
+	cp.mu.Lock()
+	defer cp.mu.Unlock()
+	return cp.numOfConnectionsInUse
 }
 
 // Handle Connection request Queue
@@ -169,9 +185,12 @@ func (cp *ClientPool) handleConnectionQueue() {
 				rq.errorChan <- ErrConnectionWaitTimeout
 			default:
 				//	first check if a idle connection is available
+
 				cp.mu.Lock()
 				numberOfIdleConnections := len(cp.idleConnections)
+
 				if numberOfIdleConnections > 0 {
+
 					for _, val := range cp.idleConnections {
 						delete(cp.idleConnections, val.id)
 						cp.mu.Unlock()
@@ -187,10 +206,11 @@ func (cp *ClientPool) handleConnectionQueue() {
 
 					conn, err := cp.openConnection()
 					//ignoring error because the only error we care about is the timeout
-					cp.mu.Lock()
-					cp.numOfOpenConnection--
-					cp.mu.Unlock()
-					if err == nil {
+					if err != nil {
+						cp.mu.Lock()
+						cp.numOfOpenConnection--
+						cp.mu.Unlock()
+					} else {
 						rq.connectionChan <- conn
 						hasCompleted = true
 					}
